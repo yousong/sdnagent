@@ -187,12 +187,36 @@ func (g *Guest) clearTc(ctx context.Context) {
 	g.watcher.tcMan.ClearIfaces(ctx, g.Who())
 }
 
+func (g *Guest) updateOvn(ctx context.Context) {
+	// guest desc
+	//
+	//  - host id
+	//  - nic.vpc_id
+	//
+	// perv
+	// g.watcher.ovnMan.EnsureVpcHost(ctx, VpcId)
+	//
+	//  - netns
+	//  - two pairs of veth
+	//  - arp responder
+	//  - route, mac, iptables
+	//
+	// perg
+	//
+	//  - nh: route, MASQ
+	//  - vn: route, masq
+}
+
+func (g *Guest) clearOvn(ctx context.Context) {
+}
+
 func (g *Guest) UpdateSettings(ctx context.Context) {
 	err := g.refresh(ctx)
 	switch err {
 	case nil:
 		g.updateFlows(ctx)
 		g.updateTc(ctx)
+		g.updateOvn(ctx)
 	case errNotRunning, errPortNotReady, errSlaveMachine:
 		g.ClearSettings(ctx)
 	}
@@ -201,5 +225,6 @@ func (g *Guest) UpdateSettings(ctx context.Context) {
 func (g *Guest) ClearSettings(ctx context.Context) {
 	g.deleteFlows(ctx)
 	g.clearTc(ctx)
+	g.clearOvn(ctx)
 	return
 }
