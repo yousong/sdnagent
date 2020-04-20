@@ -63,6 +63,7 @@ type GuestNIC struct {
 	Virtual    bool
 	VLAN       int
 	WireId     string      `json:"wire_id"`
+	HostId     string      `json:"host_id"`
 	Vpc        GuestNICVpc `json:"vpc"`
 
 	CtZoneId    uint16 `json:"-"`
@@ -71,7 +72,9 @@ type GuestNIC struct {
 }
 
 type GuestNICVpc struct {
-	Provider string `json:"provider"`
+	Id           string
+	Provider     string `json:"provider"`
+	MappedIpAddr string `json:"mapped_ip_addr"`
 }
 
 func (n *GuestNIC) TcData() *TcData {
