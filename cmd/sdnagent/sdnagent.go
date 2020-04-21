@@ -20,13 +20,13 @@ import (
 	"os/signal"
 	"syscall"
 
+	"yunion.io/x/log"
 	"yunion.io/x/sdnagent/pkg/agent/common"
 	"yunion.io/x/sdnagent/pkg/agent/server"
-	"yunion.io/x/log"
 )
 
 const (
-	PIDFILE = "/var/run/yunion-sdnagent.pid"
+	PIDFILE = "/tmp/yunion-sdnagent.pid"
 )
 
 func LockPidFile(path string) (*os.File, error) {
