@@ -188,6 +188,11 @@ func (g *Guest) clearTc(ctx context.Context) {
 }
 
 func (g *Guest) updateOvn(ctx context.Context) {
+	ovnMan := g.watcher.ovnMan
+	ovnMan.SetHostId(g.HostId)
+	for _, nic := range g.VpcNICs {
+		ovnMan.addVpcNICS(ctx, *nic)
+	}
 	// guest desc
 	//
 	//  - host id
@@ -208,6 +213,8 @@ func (g *Guest) updateOvn(ctx context.Context) {
 }
 
 func (g *Guest) clearOvn(ctx context.Context) {
+	// perv
+	// g.watcher.ovnMan.PutVpcHost(ctx, vpcId)
 }
 
 func (g *Guest) UpdateSettings(ctx context.Context) {
