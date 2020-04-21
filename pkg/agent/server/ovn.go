@@ -18,6 +18,9 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
+
+	"github.com/digitalocean/go-openvswitch/ovs"
 
 	//"github.com/vishvananda/netlink"
 	"yunion.io/x/log"
@@ -26,33 +29,26 @@ import (
 	"yunion.io/x/sdnagent/pkg/agent/utils"
 )
 
-const (
-	OvnMappedBridge = "brmapped"
-)
-
 type ovnReq struct {
-	VpcId           string
-	VpcMappedIpAddr string
-	HostId          string
-	NIC             GuestNIC
+	guestId string
+	nics    []*utils.GuestNIC
 }
 
 type ovnMan struct {
-	HostId string
-
 	Ip  string // fetch from region
 	Mac string // hash
 
-	vpcNics map[string]utils.GuestNIC
-
-	watcher *serversWatcher
-	c       chan ovnReq
+	hostId    string
+	guestNics map[string][]*utils.GuestNIC
+	watcher   *serversWatcher
+	c         chan *ovnReq
 }
 
 func newOvnMan(watcher *serversWatcher) *ovnMan {
 	man := &ovnMan{
-		watcher: w,
-		vpcNics: map[string]utils.GuestNIC{},
+		watcher:   watcher,
+		guestNics: map[string][]*utils.GuestNIC{},
+		c:         make(chan *ovnReq),
 	}
 	return man
 }
@@ -61,12 +57,15 @@ func (man *ovnMan) Start(ctx context.Context) {
 	wg := ctx.Value("wg").(*sync.WaitGroup)
 	defer wg.Done()
 
-	man.ensureMappedBridge(ctx)
+	man.init(ctx)
 
 	cleanupTicker := time.NewTicker(WatcherRefreshRate)
 	defer cleanupTicker.Stop()
 	for {
 		select {
+		case req := <-man.c:
+			man.guestNics[req.guestId] = req.nics
+			man.ensureGuestFlows(ctx, req.guestId)
 		case <-cleanupTicker.C:
 			man.cleanup(ctx)
 		case <-ctx.Done():
@@ -76,21 +75,30 @@ func (man *ovnMan) Start(ctx context.Context) {
 	}
 }
 
+func (man *ovnMan) init(ctx context.Context) {
+	//man.fetchMac(ctx) TODO
+	man.ensureMappedBridge(ctx)
+	man.ensureBasicFlows(ctx)
+}
+
+func (man *ovnMan) fetchIp(ctx context.Context) {
+}
+
 func (man *ovnMan) ensureMappedBridge(ctx context.Context) {
 	var args []string
 
 	args = []string{
 		"ovs-vsctl",
-		"--", "--may-exist", "add-br", OvnMappedBridge,
-		"--", "set", "Bridge", OvnMappedBridge, fmt.Sprintf("other-config:hwaddr=%s", man.Mac),
+		"--", "--may-exist", "add-br", common.OvnMappedBridge,
+		"--", "set", "Bridge", common.OvnMappedBridge, fmt.Sprintf("other-config:hwaddr=%s", man.Mac),
 	}
 
 	args = []string{
-		"ip", "link", "set", OvnMappedBridge, "up",
+		"ip", "link", "set", common.OvnMappedBridge, "up",
 	}
 
 	args = []string{
-		"ip", "addr", "add", man.Mac, "dev", OvnMappedBridge,
+		"ip", "addr", "add", man.Mac, "dev", common.OvnMappedBridge,
 	}
 
 	args = []string{
@@ -102,16 +110,20 @@ func (man *ovnMan) ensureMappedBridge(ctx context.Context) {
 	args = args
 }
 
+func (man *ovnMan) ensureBasicFlows(ctx context.Context) {
+	s := fmt.Sprintf("priority=3050,in_port=LOCAL,arp,arp_op=1,arp_tpa=100.64.0.0/17,actions=move:NXM_OF_ETH_SRC->NXM_OF_ETH_DST,load:%s->NXM_OF_ETH_SRC,load:0x2->NXM_OF_ARP_OP,load:%s->NXM_NX_ARP_SHA,move:NXM_OF_ARP_TPA->NXM_OF_ARP_SPA,move:NXM_NX_ARP_SHA->NXM_NX_ARP_THA,move:NXM_OF_ARP_SPA->NXM_OF_ARP_TPA,output=in_port", man.Mac)
+	s = s
+}
+
 func (man *ovnMan) ensureMappedBridgeVpcPort(ctx context.Context, vpcId string) {
 	var (
-		args    []string
-		mine    = fmt.Sprintf("v-%s", vpcId) // allow arbitary names?
-		peer    = fmt.Sprintf("v-%s-p", vpcId)
-		ifaceId = fmt.Sprintf("vpc-h/%s/%s", vpcId, man.HostId)
+		args       []string
+		mine, peer = man.pnamePair(vpcId)
+		ifaceId    = fmt.Sprintf("vpc-h/%s/%s", vpcId, man.hostId)
 	)
 	args = []string{
 		"ovs-vsctl",
-		"--", "--may-exist", "add-port", OvnMappedBridge, mine,
+		"--", "--may-exist", "add-port", common.OvnMappedBridge, mine,
 		"--", "set", "Interface", mine, "type=patch", fmt.Sprintf("options:peer=%s", peer),
 		"--", "--may-exist", "add-port", common.OvnIntegrationBridge, peer,
 		"--", "set", "Interface", peer, "type=patch", fmt.Sprintf("options:peer=%s", mine), fmt.Sprintf("external_ids:iface-id=%s", ifaceId),
@@ -119,31 +131,97 @@ func (man *ovnMan) ensureMappedBridgeVpcPort(ctx context.Context, vpcId string) 
 	args = args
 }
 
-func (man *ovnMan) ensureBasicFlow(ctx context.Context) {
-	s := fmt.Sprintf("priority=3050,in_port=LOCAL,arp,arp_op=1,arp_tpa=100.64.0.0/17,actions=move:NXM_OF_ETH_SRC->NXM_OF_ETH_DST,load:%s->NXM_OF_ETH_SRC,load:0x2->NXM_OF_ARP_OP,load:%s->NXM_NX_ARP_SHA,move:NXM_OF_ARP_TPA->NXM_OF_ARP_SPA,move:NXM_NX_ARP_SHA->NXM_NX_ARP_THA,move:NXM_OF_ARP_SPA->NXM_OF_ARP_TPA,output=in_port", man.Mac)
-	s = s
+func (man *ovnMan) pnamePair(vpcId string) (string, string) {
+	var (
+		mine = fmt.Sprintf("v-%s", vpcId)
+		peer = fmt.Sprintf("v-%s-p", vpcId)
+	)
+	return mine, peer
+}
+
+func (man *ovnMan) ensureGuestFlows(ctx context.Context, guestId string) {
+	var (
+		nics   = man.guestNics[guestId]
+		flows  []*ovs.Flow
+		vpcIds map[string]bool
+	)
+	for _, nic := range nics {
+		vpcId := nic.Vpc.Id
+		if _, ok := vpcIds[vpcId]; !ok {
+			vpcIds[vpcId] = true
+			man.ensureMappedBridgeVpcPort(ctx, vpcId)
+		}
+
+		var (
+			mine, _ = man.pnamePair(vpcId)
+			pnoMine int
+		)
+		if psMine, err := utils.DumpPort(common.OvnMappedBridge, mine); err != nil {
+			log.Errorf("ovn: dump port %s %s", common.OvnMappedBridge, mine)
+			continue
+		} else {
+			pnoMine = psMine.PortID
+		}
+		flows = append(flows,
+			utils.F(0, 30200,
+				fmt.Sprintf("in_port=LOCAL,nw_dst=%s", nic.Vpc.MappedIpAddr),
+				fmt.Sprintf("mod_dl_dst:%s,mod_nw_dst:%s,output=%d", common.OvnGatewayMac, nic.IP, pnoMine),
+			),
+			utils.F(0, 30100,
+				fmt.Sprintf("in_port=%d,dl_src=%s,ip,nw_src=%s", pnoMine, common.OvnGatewayMac, nic.IP),
+				fmt.Sprintf("mod_dl_dst:%s,mod_nw_src:%s,output=LOCAL", man.Mac, nic.Vpc.MappedIpAddr),
+			),
+		)
+	}
 }
 
 func (man *ovnMan) SetHostId(ctx context.Context, hostId string) {
-	if man.HostId == "" {
-		man.HostId = hostId
+	if man.hostId == "" {
+		man.hostId = hostId
 		return
 	}
-	if man.HostId == hostId {
+	if man.hostId == hostId {
 		return
 	}
 	// quit on host id change
 }
 
-func (man *ovnMan) EnsureVpcNIC(ctx context.Context, nic utils.GuestNIC) {
+func (man *ovnMan) SetGuestNICs(ctx context.Context, guestId string, nics []*utils.GuestNIC) {
+	req := &ovnReq{
+		guestId: guestId,
+		nics:    nics,
+	}
+	man.c <- req
 }
 
 func (man *ovnMan) cleanup(ctx context.Context) {
-	// log removed ports
+	// log
+	//
+
+	for guestId, nics := range man.guestNics {
+		if len(nics) == 0 {
+			delete(man.guestNics, guestId)
+		}
+	}
+
+	// remove unused vpc patch ports
+	var vpcIds map[string]bool
+	for guestId, nics := range man.guestNics {
+		guestId = guestId
+		for _, nic := range nics {
+			vpcIds[nic.Vpc.Id] = true
+		}
+	}
+	for {
+		vpcId := ""
+		if _, ok := vpcIds[vpcId]; !ok {
+			// remove the port
+		}
+	}
+
+	// sync flows
 }
 
-// when to do cleanup
-//
 // NOTE: KEEP THIS IN SYNC WITH CODE ABOVE
 //
 // Flows

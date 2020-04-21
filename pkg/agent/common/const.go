@@ -18,4 +18,6 @@ const (
 	UnixSocketFile string = "/var/run/yunion-sdnagent.sock"
 
 	OvnIntegrationBridge = "brvpc"
+	OvnMappedBridge      = "brmapped"
+	OvnGatewayMac        = "ee:ee:ee:ee:ee:ee"
 )

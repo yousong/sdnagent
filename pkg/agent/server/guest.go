@@ -189,32 +189,15 @@ func (g *Guest) clearTc(ctx context.Context) {
 
 func (g *Guest) updateOvn(ctx context.Context) {
 	ovnMan := g.watcher.ovnMan
-	ovnMan.SetHostId(g.HostId)
-	for _, nic := range g.VpcNICs {
-		ovnMan.addVpcNICS(ctx, *nic)
+	if len(g.VpcNICs) > 0 {
+		ovnMan.SetHostId(ctx, g.HostId)
+		ovnMan.SetGuestNICs(ctx, g.Id, g.VpcNICs)
 	}
-	// guest desc
-	//
-	//  - host id
-	//  - nic.vpc_id
-	//
-	// perv
-	// g.watcher.ovnMan.EnsureVpcHost(ctx, VpcId)
-	//
-	//  - netns
-	//  - two pairs of veth
-	//  - arp responder
-	//  - route, mac, iptables
-	//
-	// perg
-	//
-	//  - nh: route, MASQ
-	//  - vn: route, masq
 }
 
 func (g *Guest) clearOvn(ctx context.Context) {
-	// perv
-	// g.watcher.ovnMan.PutVpcHost(ctx, vpcId)
+	ovnMan := g.watcher.ovnMan
+	ovnMan.SetGuestNICs(ctx, g.Id, nil)
 }
 
 func (g *Guest) UpdateSettings(ctx context.Context) {
