@@ -31,6 +31,7 @@ import (
 	fwdpb "yunion.io/x/onecloud/pkg/hostman/guestman/forwarder/api"
 
 	"yunion.io/x/sdnagent/pkg/agent/utils"
+	"yunion.io/x/sdnagent/pkg/agent/utils/zoneman"
 )
 
 var REGEX_UUID = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
@@ -67,16 +68,15 @@ type serversWatcher struct {
 	watcher    *fsnotify.Watcher
 	hostLocal  *HostLocal
 	guests     map[string]*Guest
-	zoneMan    *utils.ZoneMan
+	zoneMan    zoneman.ZoneMan
 
 	cmdCh chan wCmdReq
 }
 
 func newServersWatcher() (*serversWatcher, error) {
 	w := &serversWatcher{
-		guests:  map[string]*Guest{},
-		zoneMan: utils.NewZoneMan(GuestCtZoneBase),
-		tcMan:   NewTcMan(),
+		guests: map[string]*Guest{},
+		tcMan:  NewTcMan(),
 
 		cmdCh: make(chan wCmdReq),
 	}
@@ -172,6 +172,15 @@ func (w *serversWatcher) Start(ctx context.Context, agent *AgentServer) {
 	w.hostConfig = w.agent.hostConfig
 
 	var err error
+
+	w.zoneMan, err = zoneman.New(w.hostConfig.SdnZoneAllocMethod,
+		zoneman.BaseZoneIdOption(GuestCtZoneBase),
+		zoneman.SharedZoneIdOption(0),
+	)
+	if err != nil {
+		log.Errorf("create zoneman: %s", err)
+		return
+	}
 
 	// start watcher before scan
 	w.watcher, err = fsnotify.NewWatcher()
